@@ -8,12 +8,27 @@ dependencies = [
     "pyyaml>=6.0",
     "pydantic>=2.0",
     "httpx>=0.27",
-    "huggingface_hub>=0.20",
+    "codex-app-server-sdk>=0.2.0",
+    "boto3>=1.35",
+    "datasets>=2.0",
+    "six>=1.16",
+    "tinker",
+    "tinker-cookbook",
 ]
 
 [project.optional-dependencies]
 tau = ["tau2"]
 harbor = ["harbor", "modal"]
+swebench = ["pandas>=2.0", "swebench"]
+
+[project.scripts]
+meta-agent = "meta_agent.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["meta_agent*", "benchmarks*"]
+
+[tool.pytest.ini_options]
+norecursedirs = ["docs/internal"]
 
 [build-system]
 requires = ["setuptools>=61.0"]

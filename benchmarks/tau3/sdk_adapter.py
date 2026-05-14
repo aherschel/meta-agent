@@ -15,6 +15,7 @@ from typing import Any
 
 from claude_agent_sdk import (
     ClaudeAgentOptions,
+    HookMatcher,
     query,
     tool,
     create_sdk_mcp_server,
@@ -23,7 +24,7 @@ from claude_agent_sdk import (
     ToolUseBlock,
 )
 
-from meta_agent.run_context import RunContext
+from meta_agent.core.run_context import RunContext
 
 
 @dataclass
@@ -138,6 +139,17 @@ class SDKTaskResult:
     messages: list[dict[str, Any]]
     tool_calls: list[dict[str, Any]]
     session_id: str | None
+    error: str | None = None
+    # Full tau2-format trajectory (list of message dicts produced by
+    # `Message.model_dump()`), populated regardless of Stage-1/Stage-2
+    # usage. Stage-2's reward path feeds this into the pairwise judge;
+    # Stage-1 and vanilla tau3 callers can ignore it. Empty list when
+    # the rollout crashed before any tau2 message was recorded.
+    tau2_conversation: list[dict[str, Any]] = field(default_factory=list)
+    # Ordered program-harness telemetry, populated by program_adapter. This is
+    # the SFT/RFT-friendly stream: model calls, parsed actions, tool calls,
+    # customer responses, and any candidate-specific ctx.log_event records.
+    events: list[dict[str, Any]] = field(default_factory=list)
 
 
 TAU_JUDGE_SYSTEM_BINARY = (
@@ -221,22 +233,88 @@ def _judge_tau_task(
 
 def _judge_tau_self(user_content: str, model: str) -> TauJudgeResult:
     """Same-family judge: Claude judging Claude via Bedrock."""
-    import os
-    import anthropic
+    import asyncio
 
-    client = anthropic.AnthropicBedrock(
-        api_key=os.environ.get("BEDROCK_BEARER_TOKEN") or os.environ.get("AWS_BEARER_TOKEN_BEDROCK"),
-        aws_region=os.environ.get("BEDROCK_REGION") or os.environ.get("AWS_REGION", "us-east-1"),
-    )
-    response = client.messages.create(
+    from meta_agent.services.llm import extract_text, invoke_claude
+
+    response = asyncio.run(invoke_claude(
         model=model,
-        max_tokens=10,
-        temperature=0,
         system=TAU_JUDGE_SYSTEM_BINARY,
         messages=[{"role": "user", "content": user_content}],
-    )
-    raw = response.content[0].text if response.content else ""
-    return TauJudgeResult(correct=_parse_verdict(raw))
+        max_tokens=10,
+        temperature=0,
+    ))
+    return TauJudgeResult(correct=_parse_verdict(extract_text(response)))
+
+
+# Tau2's user_simulator emits one of these tokens in its message content
+# when the conversation should terminate (see tau2/user/user_simulator_base.py).
+# The tau3 SDK adapter uses these to decide whether the agent is allowed to
+# stop its turn: if the last customer message contained a terminator, the
+# agent may stop; otherwise the Stop hook blocks and forces another turn.
+_TAU_USER_TERMINATORS: tuple[str, ...] = (
+    "###STOP###",
+    "###TRANSFER###",
+    "###OUT-OF-SCOPE###",
+)
+
+
+def _make_stop_hook_until_user_ends(state: ConversationState) -> HookMatcher:
+    """Stop hook: keep the agent talking until the user simulator ends the chat.
+
+    Why this exists: the Claude Agent SDK terminates its query loop as soon
+    as the assistant emits a turn without a tool call. That behavior is fine
+    for single-shot tasks (judge, arena-hard) but wrong for tau — the agent
+    is supposed to carry a multi-turn conversation driven by a simulated
+    customer, and sometimes it reasons out loud between tool calls. Without
+    intervention, the first text-only turn truncates the rollout to a 2-3
+    message stub, producing garbage reward signal.
+
+    Mirrors the pattern used by `meta_agent.task_runner.judge_runner`'s
+    PostToolUse hook, just pointed at the other direction: that hook stops
+    the agent early when its terminal tool fires; this one forces the agent
+    to keep going until the benchmark's terminal condition (user signaling
+    end) is met.
+
+    The `stop_hook_active` check is the SDK's infinite-loop guard. If the
+    agent blocks, continues, then tries to stop again without producing any
+    meaningful work (e.g. two consecutive text-only turns), we allow the
+    stop rather than spin forever. This keeps rollouts bounded even in
+    pathological cases, and `max_turns` remains the hard ceiling.
+    """
+    async def _on_stop(
+        input_data: dict[str, Any],
+        tool_use_id: str | None,
+        context: Any,
+    ) -> dict[str, Any]:
+        if input_data.get("stop_hook_active"):
+            return {}
+
+        last_user_text: str | None = None
+        for msg in reversed(state.messages):
+            if msg.get("role") == "user":
+                last_user_text = str(msg.get("content") or "")
+                break
+
+        if last_user_text and any(tok in last_user_text for tok in _TAU_USER_TERMINATORS):
+            return {}
+
+        if not state.messages:
+            reason = (
+                "You have not yet greeted the customer. Call "
+                "mcp__tau__talk_to_customer to start the conversation."
+            )
+        else:
+            reason = (
+                "The customer has not ended the conversation yet. Keep "
+                "helping them: respond via mcp__tau__talk_to_customer, or "
+                "use the database tools to look up or modify records as "
+                "the policy requires. Do not stop until the customer "
+                "explicitly ends the call."
+            )
+        return {"decision": "block", "reason": reason}
+
+    return HookMatcher(matcher=None, hooks=[_on_stop])
 
 
 async def run_tau_task_sdk(
@@ -287,43 +365,57 @@ async def run_tau_task_sdk(
         f"POLICY (follow this exactly):\n{policy}"
     )
 
-    import importlib.util
-    spec = importlib.util.spec_from_file_location("harness_config", config_path)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-
     import os
-    if os.environ.get("CLAUDE_CODE_USE_BEDROCK") == "1":
-        _bedrock_map = {
-            "claude-haiku-4-5": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-            "claude-sonnet-4-6": "us.anthropic.claude-sonnet-4-6",
-            "claude-opus-4-6": "us.anthropic.claude-opus-4-6-v1",
-        }
-        model = _bedrock_map.get(model, model)
+    from pathlib import Path
 
-    ctx = RunContext(cwd="/tmp", model=model, task_instruction=task_desc)
-    options = module.build_options(ctx)
+    from meta_agent.harness_contracts.claude_agent_sdk import (
+        append_hooks,
+        build_claude_agent_options,
+        extend_allowed_tools,
+        merge_mcp_server,
+        prepend_system_prompt,
+        set_default_max_turns,
+        ClaudeAgentHarnessError,
+    )
+    from meta_agent.services.llm import ensure_bedrock_env, resolve_bedrock_model
+
+    ensure_bedrock_env()
+    resolved_model = resolve_bedrock_model(model)
+
+    # Tau tasks don't touch the filesystem, but the SDK needs a valid cwd.
+    cwd = "/tmp"
+    ctx = RunContext(cwd=cwd, model=resolved_model, task_instruction=task_desc)
+
+    harness_path = Path(config_path)
+    if harness_path.is_dir():
+        harness_path = harness_path / "harness.py"
+    if not harness_path.is_file():
+        raise ClaudeAgentHarnessError(
+            f"tau3 config_path must contain harness.py; got {config_path!r}"
+        )
+    options = build_claude_agent_options(harness_path, ctx)
+
     perm_override = os.environ.get("CLAUDE_PERMISSION_MODE")
-    if perm_override and hasattr(options, "permission_mode") and options.permission_mode != perm_override:
+    if perm_override and options.permission_mode != perm_override:
         options.permission_mode = perm_override
 
-    options.tools = None
-    options.cwd = "/tmp"
-
-    options.mcp_servers = {**(options.mcp_servers or {}), "tau": server}
-
-    # Extend allowed_tools: tau tools + tools from config's custom MCP servers
-    config_allowed = options.allowed_tools or []
-    extra_tools = [t for t in config_allowed if not t.startswith("mcp__tau__")]
-    options.allowed_tools = tool_names + extra_tools
-
-    # Preserve config's append text, combine with tau context
-    config_append = ""
-    if isinstance(options.system_prompt, str):
-        config_append = options.system_prompt
-    elif isinstance(options.system_prompt, dict):
-        config_append = options.system_prompt.get("append", "")
-    options.system_prompt = f"{config_append}\n\n{tau_prompt}" if config_append else tau_prompt
+    # Benchmark-owned exit contract: tau's user simulator + env tools are the
+    # only way to resolve a task. Inject them on top of the proposer's options.
+    merge_mcp_server(options, "tau", server)
+    extend_allowed_tools(options, tool_names)
+    prepend_system_prompt(options, tau_prompt)
+    # Tau airline rollouts need 20-40 turns of agent ↔ user ↔ tools to resolve
+    # a task; the SDK's default (`max_turns=None`) caps the agent at ~3 turns,
+    # which produces near-empty trajectories ("Hello!" → user request → done).
+    # 50 matches the ceiling promised in `harnesses/claude_vanilla/harness.py`'s
+    # docstring and the stage-1 pool generator's `--max-steps 100` budget.
+    set_default_max_turns(options, 50)
+    # Stop-hook exit contract: force the agent to keep working until the user
+    # simulator signals end (###STOP###/###TRANSFER###/###OUT-OF-SCOPE###).
+    # Without this, a single text-only assistant turn ends the SDK loop
+    # prematurely and produces 2-3 message stubs (see
+    # `_make_stop_hook_until_user_ends` for the rationale).
+    append_hooks(options, "Stop", [_make_stop_hook_until_user_ends(conv_state)])
 
     prompt = "A customer is calling. Greet them using mcp__tau__talk_to_customer and help resolve their issue."
 
@@ -392,6 +484,13 @@ async def run_tau_task_sdk(
     else:
         reward = gold_reward
 
+    tau2_conversation_dump: list[dict[str, Any]] = []
+    for m in conv_state.tau2_trajectory:
+        try:
+            tau2_conversation_dump.append(m.model_dump())
+        except AttributeError:
+            continue
+
     return SDKTaskResult(
         task_id=str(task_id),
         domain=domain,
@@ -404,4 +503,5 @@ async def run_tau_task_sdk(
         messages=conv_state.messages,
         tool_calls=conv_state.tool_call_log,
         session_id=session_id,
+        tau2_conversation=tau2_conversation_dump,
     )

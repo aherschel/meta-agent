@@ -1,0 +1,65 @@
+{
+  "name": "plan-rewardbench-tiny-search-5",
+  "dataset": "wyy1112/Plan-RewardBench",
+  "dataset_split": "train",
+  "split": "tiny-search-5",
+  "seed": 42,
+  "grouping": "normalized_query_with_uuid_fallback",
+  "n_groups": 5,
+  "group_key_hashes": [
+    "201da4766a401384",
+    "a045ab15c20019bb",
+    "b2e2ac8a333ac53f",
+    "d6cda9eee032d0d5",
+    "e9e52741cafb235e"
+  ],
+  "difficulty_proxy": "turns + chars/2000 + 0.5*tools + 0.25*tool_events",
+  "difficulty_bins_per_bucket": 3,
+  "created_at": "2026-05-01T23:46:49.037031+00:00",
+  "n_pairs": 5,
+  "bucket_counts": {
+    "irrelevance_unavailable": 1,
+    "planning_multi_easy": 1,
+    "planning_multi_hard": 1,
+    "planning_robustness": 1,
+    "planning_single_easy": 0,
+    "planning_single_hard": 0,
+    "refusal": 1
+  },
+  "bucket_difficulty": {
+    "irrelevance_unavailable": {
+      "min": 4.475,
+      "mean": 4.475,
+      "max": 4.475
+    },
+    "planning_multi_easy": {
+      "min": 25.2555,
+      "mean": 25.2555,
+      "max": 25.2555
+    },
+    "planning_multi_hard": {
+      "min": 38.0135,
+      "mean": 38.0135,
+      "max": 38.0135
+    },
+    "planning_robustness": {
+      "min": 28.3515,
+      "mean": 28.3515,
+      "max": 28.3515
+    },
+    "refusal": {
+      "min": 9.051,
+      "mean": 9.051,
+      "max": 9.051
+    }
+  },
+  "pair_ids": [
+    "irrelevance_unavailable__01ba3099-127e-57c7-88ec-cc5d9879b5bc__896",
+    "planning_multi_easy__0033761a-ef3e-548f-8ad2-8d7cbd03e994__2",
+    "planning_multi_hard__0c6f7401-5395-50de-8ed8-a8723ebea8f5__110",
+    "planning_robustness__0c30c024-29ca-5a67-8b48-2ec1b1b8ee5b__494",
+    "refusal__2af6a4c9-1d21-5431-8061-c97bb57e46e6__856"
+  ],
+  "source_manifest": "benchmarks/plan_rewardbench/data/plan_rb_grouped_search_panel.json",
+  "selection": "one representative pair from five buckets for loop smoke tests"
+}

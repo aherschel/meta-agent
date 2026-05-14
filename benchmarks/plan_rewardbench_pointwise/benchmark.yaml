@@ -1,0 +1,43 @@
+name: plan-rewardbench-pointwise
+type: plan_rewardbench
+description: >-
+  Plan-RewardBench evaluated through a pointwise latent trajectory reward
+  interface. The harness scores exactly one trajectory and returns a scalar;
+  the adapter calls the harness on both trajectories and compares scalar
+  scores in code.
+
+backend:
+  dataset: wyy1112/Plan-RewardBench
+  split: train
+  timeout: 600
+  position_swap: false
+  program_harness_mode: pointwise_score
+  sample_seed: 42
+
+optimizer:
+  candidates_per_iter: 5
+
+splits:
+  grouped-search:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_search.json
+  grouped-search-panel:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_search_panel.json
+  grouped-search-panel-25:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_search_panel_25.json
+  grouped-tiny-search-5:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_tiny_search_5.json
+  grouped-val:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_val.json
+  grouped-val-50:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_val_50.json
+  grouped-tiny-val-5:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_tiny_val_5.json
+  grouped-test:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_test.json
+  grouped-test-50:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_test_50.json
+  grouped-test-50-swap-audit:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_test_50.json
+    position_swap: true
+  full:
+    {}

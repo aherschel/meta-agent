@@ -1,0 +1,80 @@
+name: tau3-trajectory-pointwise
+type: tau3_trajectory_judge
+description: >-
+  Tau3 trajectory success judged through a pointwise scalar reward interface.
+  The harness scores exactly one trajectory and returns a scalar; the adapter
+  calls the harness on both trajectories from a pass/fail pair and compares
+  scalar scores in code.
+
+backend:
+  pool_path: benchmarks/tau3_trajectory_judge/data/airline_pool_v2_all_repaired.jsonl
+  task_split: judge-v2-all
+  max_pairs_per_task: 12
+  position_swap: false
+  pair_sampling_seed: 42
+  timeout: 720
+  program_harness_mode: pointwise_score
+
+optimizer:
+  candidates_per_iter: 3
+
+x-judge-v2-balanced-train-task-ids: &judge_v2_balanced_train_task_ids
+  ["0", "1", "3", "6", "9", "11", "12", "15", "16", "18", "20", "21", "25", "27", "28", "30", "31", "32", "34", "36", "37", "38", "40", "43", "45"]
+
+splits:
+  smoke:
+    pool_path: benchmarks/tau3_trajectory_judge/data/airline_pool_smoke.jsonl
+    task_split: judge-train
+    max_pairs_per_task: 2
+    timeout: 120
+
+  judge-v2-balanced-train:
+    task_ids: *judge_v2_balanced_train_task_ids
+
+  sample-eff-n25-s0:
+    task_ids: *judge_v2_balanced_train_task_ids
+    max_pairs_per_task: 1
+
+  sample-eff-n50-s0:
+    task_ids: *judge_v2_balanced_train_task_ids
+    max_pairs_per_task: 2
+
+  sample-eff-n100-s0:
+    task_ids: *judge_v2_balanced_train_task_ids
+    max_pairs_per_task: 4
+
+  sample-eff-n200-s0:
+    task_ids: *judge_v2_balanced_train_task_ids
+    max_pairs_per_task: 8
+
+  sample-eff-n300-s0:
+    task_ids: *judge_v2_balanced_train_task_ids
+    max_pairs_per_task: 12
+
+  coverage-eff-n25-s0:
+    task_ids:
+      ["31", "25", "18", "36", "34"]
+    max_pairs_per_task: 5
+
+  coverage-eff-n50-s0:
+    task_ids:
+      ["31", "25", "18", "36", "34", "12", "11", "20", "30", "38"]
+    max_pairs_per_task: 5
+
+  coverage-eff-n100-s0:
+    task_ids:
+      ["31", "25", "18", "36", "34", "12", "11", "20", "30", "38", "21", "32", "1", "28", "40", "27", "3", "43", "9", "45"]
+    max_pairs_per_task: 5
+
+  judge-v2-balanced-val:
+    task_ids:
+      ["5", "8", "13", "17", "19", "22", "26", "35", "48"]
+
+  judge-v2-balanced-test:
+    task_ids:
+      ["2", "4", "7", "10", "33", "41", "42", "47", "49"]
+
+  judge-v2-balanced-test-swap-audit:
+    task_ids:
+      ["2", "4", "7", "10", "33", "41", "42", "47", "49"]
+    position_swap: true

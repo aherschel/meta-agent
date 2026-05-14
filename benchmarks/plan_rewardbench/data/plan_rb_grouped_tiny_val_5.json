@@ -1,0 +1,65 @@
+{
+  "name": "plan-rewardbench-tiny-val-5",
+  "dataset": "wyy1112/Plan-RewardBench",
+  "dataset_split": "train",
+  "split": "tiny-val-5",
+  "seed": 42,
+  "grouping": "normalized_query_with_uuid_fallback",
+  "n_groups": 5,
+  "group_key_hashes": [
+    "08f2200aee1e68de",
+    "21575893f898bc8c",
+    "5ea61ab038c7ca53",
+    "9b717ae9cbb16821",
+    "d1040cee7a58d17e"
+  ],
+  "difficulty_proxy": "turns + chars/2000 + 0.5*tools + 0.25*tool_events",
+  "difficulty_bins_per_bucket": 3,
+  "created_at": "2026-05-01T23:46:49.038863+00:00",
+  "n_pairs": 5,
+  "bucket_counts": {
+    "irrelevance_unavailable": 1,
+    "planning_multi_easy": 1,
+    "planning_multi_hard": 1,
+    "planning_robustness": 1,
+    "planning_single_easy": 0,
+    "planning_single_hard": 0,
+    "refusal": 1
+  },
+  "bucket_difficulty": {
+    "irrelevance_unavailable": {
+      "min": 4.518,
+      "mean": 4.518,
+      "max": 4.518
+    },
+    "planning_multi_easy": {
+      "min": 22.0195,
+      "mean": 22.0195,
+      "max": 22.0195
+    },
+    "planning_multi_hard": {
+      "min": 21.1185,
+      "mean": 21.1185,
+      "max": 21.1185
+    },
+    "planning_robustness": {
+      "min": 28.3925,
+      "mean": 28.3925,
+      "max": 28.3925
+    },
+    "refusal": {
+      "min": 29.0935,
+      "mean": 29.0935,
+      "max": 29.0935
+    }
+  },
+  "pair_ids": [
+    "irrelevance_unavailable__01c4ea2a-8f46-5fb4-9488-0b8e6b149a2e__897",
+    "planning_multi_easy__159eeab7-98ee-5231-ba64-dbc200ec2713__15",
+    "planning_multi_hard__1e698a4a-919b-5139-a8f7-118ad514ddc0__117",
+    "planning_robustness__125473e3-4eb2-5a1a-8a21-70e5cd36b3ee__499",
+    "refusal__00cdedd8-0dc1-5147-8146-f6755619bbdc__846"
+  ],
+  "source_manifest": "benchmarks/plan_rewardbench/data/plan_rb_grouped_val.json",
+  "selection": "one representative pair from five buckets for loop smoke tests"
+}
