@@ -1,12 +1,133 @@
+# Environment / local config
 .env
+.env.*
+!.env.example
 .venv/
+
+# Python
 __pycache__/
-*.pyc
-jobs/
-logs/
-experience/
+*.py[cod]
 *.egg-info/
+.pytest_cache/
+
+# Node / frontend
+node_modules/
+.next/
 dist/
 build/
-.next/
-node_modules/
+ui/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Runtime state and generated artifacts
+experience/
+data/
+logs/
+jobs/
+tmp/
+tmp_modal_logs/
+tmp_modal_runs/
+workspace/
+workspace_backups/
+*.log
+*.jsonl
+
+# Local agent/editor config
+.cursor/
+.claude/
+AGENTS.md
+
+# Public launch surface
+#
+# The public repo should ship the optimizer framework, a tiny runnable example,
+# selected benchmark scaffolding, and baseline/starter harnesses. Copied
+# experiment outputs, tuned candidates, large assets, and maintainer scripts
+# should stay out unless they are deliberately curated and force-added later.
+
+# Keep only the toy example plus selected public benchmark scaffolding.
+benchmarks/*
+!benchmarks/example/
+!benchmarks/example/**
+!benchmarks/plan_rewardbench/
+!benchmarks/plan_rewardbench/**
+!benchmarks/plan_rewardbench_pointwise/
+!benchmarks/plan_rewardbench_pointwise/**
+!benchmarks/tau3/
+!benchmarks/tau3/**
+!benchmarks/tau3_trajectory_judge/
+!benchmarks/tau3_trajectory_judge/**
+!benchmarks/tau3_trajectory_pointwise/
+!benchmarks/tau3_trajectory_pointwise/**
+
+# Benchmark data is ignored unless explicitly treated as small setup metadata.
+benchmarks/**/data/
+!benchmarks/plan_rewardbench/data/
+!benchmarks/plan_rewardbench/data/*.json
+benchmarks/**/*manifest*.json
+
+# Tau3 local experiment/result artifacts. Keep the benchmark setup, not our runs.
+benchmarks/tau3/CLOSE_LOOP_POINTWISE.md
+benchmarks/tau3/close_loop*_pilot.yaml
+benchmarks/tau3/agent_split_manifest_*.json
+benchmarks/tau3/pointwise_reward.py
+benchmarks/tau3/program_adapter.py
+
+# Keep only starter plus baseline harnesses for public benchmark scaffolding.
+harnesses/*
+!harnesses/starter/
+!harnesses/starter/**
+!harnesses/agents/
+harnesses/agents/*
+!harnesses/agents/tau3_airline/
+!harnesses/agents/tau3_airline/harness.py
+!harnesses/reward_models/
+harnesses/reward_models/*
+!harnesses/reward_models/plan_rewardbench/
+harnesses/reward_models/plan_rewardbench/*
+!harnesses/reward_models/plan_rewardbench/pairwise_judge/
+!harnesses/reward_models/plan_rewardbench/pairwise_judge/harness.py
+!harnesses/reward_models/plan_rewardbench/pointwise_scorer/
+!harnesses/reward_models/plan_rewardbench/pointwise_scorer/harness.py
+!harnesses/reward_models/tau3_airline_trajectory/
+harnesses/reward_models/tau3_airline_trajectory/*
+!harnesses/reward_models/tau3_airline_trajectory/pairwise_judge/
+!harnesses/reward_models/tau3_airline_trajectory/pairwise_judge/harness.py
+!harnesses/reward_models/tau3_airline_trajectory/pointwise_scorer/
+!harnesses/reward_models/tau3_airline_trajectory/pointwise_scorer/harness.py
+
+# Research/internal docs and launch assets are private until curated.
+docs/internal/
+docs/references/
+docs/research/
+.github/assets/
+images/
+
+# Maintainer/research scripts are private by default.
+scripts/
+configs/
+meta_agent/proposer_instructions/harbor_agent.md
+
+# Local/private tests should not be swept into the public copy accidentally.
+# Add a curated public test suite explicitly when the public repo is staged.
+tests/
+
+# Keep root markdown tight: README plus standard OSS governance docs only.
+/*.md
+!/README.md
+!/CONTRIBUTING.md
+!/SECURITY.md
+!/CODE_OF_CONDUCT.md
+!/CHANGELOG.md
+
+# Generated files inside allowlisted folders
+**/__pycache__/
+**/*.py[cod]
+**/*_RESULTS.md
+**/*_PLAN.md
+**/*_proposer*.md

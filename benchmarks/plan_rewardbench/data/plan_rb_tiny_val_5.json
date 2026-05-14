@@ -1,0 +1,23 @@
+{
+  "name": "plan-rewardbench-tiny-val-5",
+  "dataset": "wyy1112/Plan-RewardBench",
+  "dataset_split": "train",
+  "split": "tiny-val-5",
+  "source_manifest": "benchmarks/plan_rewardbench/data/plan_rb_val_50.json",
+  "selection": "one representative pair from five buckets for loop smoke tests",
+  "n_pairs": 5,
+  "bucket_counts": {
+    "irrelevance_unavailable": 1,
+    "planning_multi_easy": 1,
+    "planning_multi_hard": 1,
+    "planning_robustness": 1,
+    "refusal": 1
+  },
+  "pair_ids": [
+    "irrelevance_unavailable__01c4ea2a-8f46-5fb4-9488-0b8e6b149a2e__898",
+    "planning_multi_easy__0033761a-ef3e-548f-8ad2-8d7cbd03e994__2",
+    "planning_multi_hard__47c651d5-4e3e-55a0-b3b0-c5a48cd99292__128",
+    "planning_robustness__0c30c024-29ca-5a67-8b48-2ec1b1b8ee5b__493",
+    "refusal__5629e4ce-ff29-5738-8c1d-1741a26bc7cf__891"
+  ]
+}

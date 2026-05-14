@@ -1,0 +1,62 @@
+name: plan-rewardbench
+type: plan_rewardbench
+description: >-
+  Plan-RewardBench trajectory-level pairwise reward-model benchmark for
+  tool-augmented agents. Each item compares a preferred tool-agent trajectory
+  against a plausible rejected trajectory.
+
+backend:
+  dataset: wyy1112/Plan-RewardBench
+  split: train
+  timeout: 600
+  position_swap: true
+  sample_seed: 42
+
+optimizer:
+  candidates_per_iter: 5
+
+splits:
+  smoke:
+    samples_per_bucket: 1
+  mini:
+    samples_per_bucket: 5
+  baseline-20:
+    samples_per_bucket: 20
+  search:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_search.json
+  search-panel:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_search_panel.json
+  search-panel-25:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_search_panel_25.json
+  grouped-search:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_search.json
+  grouped-search-panel:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_search_panel.json
+  grouped-search-panel-25:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_search_panel_25.json
+  grouped-tiny-search-5:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_tiny_search_5.json
+  grouped-val:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_val.json
+  grouped-val-50:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_val_50.json
+  grouped-tiny-val-5:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_tiny_val_5.json
+  grouped-test:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_test.json
+  grouped-test-50:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_grouped_test_50.json
+  tiny-search-5:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_tiny_search_5.json
+  val:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_val.json
+  val-50:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_val_50.json
+  tiny-val-5:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_tiny_val_5.json
+  test:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_test.json
+  test-50:
+    pair_ids_path: benchmarks/plan_rewardbench/data/plan_rb_test_50.json
+  full:
+    {}
