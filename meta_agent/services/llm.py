@@ -65,6 +65,26 @@ def resolve_bedrock_model(model: str) -> str:
     return BEDROCK_MODEL_MAP.get(model, model)
 
 
+def resolve_model_for_provider(model: str) -> str:
+    """Resolve a model id for the active provider.
+
+    Only the Bedrock provider rewrites short names to Bedrock inference-profile
+    ids; ``openrouter`` and ``anthropic`` take the slug verbatim (minus any
+    routing prefix), so a session running ``claude-opus-4-8`` or
+    ``minimax/minimax-m2.7`` is never mangled into a Bedrock id it can't use.
+    """
+    if not model:
+        return model
+    provider = selected_llm_provider()
+    if provider == LLM_PROVIDER_BEDROCK:
+        return resolve_bedrock_model(model)
+    if provider == LLM_PROVIDER_OPENROUTER:
+        return _strip_provider_prefix(model, "openrouter")
+    if provider == LLM_PROVIDER_ANTHROPIC:
+        return _strip_provider_prefix(model, "anthropic")
+    return model
+
+
 def _looks_like_bedrock_model(model: str) -> bool:
     if model in BEDROCK_MODEL_MAP:
         return True
@@ -114,6 +134,163 @@ def _tinker_base_model(model: str) -> str:
     if model.startswith("tinker:"):
         return model.split(":", 1)[1]
     return model
+
+
+# ---------------------------------------------------------------------------
+# LLM provider selection (env-driven)
+# ---------------------------------------------------------------------------
+#
+# Historically every Claude call in this project went through AWS Bedrock. That
+# is still the default, but the optimizer can also drive its model calls through
+# OpenRouter (OpenAI-compatible Chat Completions) or the Anthropic API directly,
+# selected by `META_AGENT_LLM_PROVIDER`. This is what lets the loop run on hosts
+# that only have an OpenRouter / Anthropic key and no AWS Bedrock access (e.g.
+# the ASP fleet). See docs / README for the full env contract.
+
+LLM_PROVIDER_BEDROCK = "bedrock"
+LLM_PROVIDER_OPENROUTER = "openrouter"
+LLM_PROVIDER_ANTHROPIC = "anthropic"
+
+_VALID_LLM_PROVIDERS = frozenset(
+    {LLM_PROVIDER_BEDROCK, LLM_PROVIDER_OPENROUTER, LLM_PROVIDER_ANTHROPIC}
+)
+
+OPENROUTER_DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
+ANTHROPIC_DEFAULT_BASE_URL = "https://api.anthropic.com"
+ANTHROPIC_DEFAULT_VERSION = "2023-06-01"
+
+
+def selected_llm_provider() -> str:
+    """Return the active LLM provider from `META_AGENT_LLM_PROVIDER`.
+
+    Defaults to ``bedrock`` (unchanged behavior). Accepts ``openrouter`` and
+    ``anthropic``. Unknown values raise so a typo fails loudly rather than
+    silently routing to Bedrock (and demanding AWS creds that don't exist).
+    """
+    raw = os.environ.get("META_AGENT_LLM_PROVIDER", "").strip().lower()
+    if not raw:
+        return LLM_PROVIDER_BEDROCK
+    if raw not in _VALID_LLM_PROVIDERS:
+        raise RuntimeError(
+            f"Unknown META_AGENT_LLM_PROVIDER={raw!r}. "
+            f"Expected one of: {', '.join(sorted(_VALID_LLM_PROVIDERS))}."
+        )
+    return raw
+
+
+_LEGACY_DEFAULT_MODEL = "gpt-5.4"
+
+
+def default_eval_model() -> str:
+    """Default eval model when ``--model`` is omitted.
+
+    Honors ``META_AGENT_MODEL`` first; otherwise keeps the historical
+    ``gpt-5.4`` so existing Bedrock/Azure runs are unchanged.
+    """
+    return os.environ.get("META_AGENT_MODEL", "").strip() or _LEGACY_DEFAULT_MODEL
+
+
+def default_proposer_model(eval_model: str | None = None) -> str:
+    """Default proposer model when ``--proposer-model`` is omitted.
+
+    Order: ``META_AGENT_PROPOSER_MODEL`` → ``META_AGENT_MODEL`` → the resolved
+    eval model → historical ``gpt-5.4``.
+    """
+    return (
+        os.environ.get("META_AGENT_PROPOSER_MODEL", "").strip()
+        or os.environ.get("META_AGENT_MODEL", "").strip()
+        or (eval_model or "").strip()
+        or _LEGACY_DEFAULT_MODEL
+    )
+
+
+def default_proposer_cli() -> str:
+    """Default proposer backend: CLI-free when a non-Bedrock provider is active."""
+    if selected_llm_provider() == LLM_PROVIDER_BEDROCK:
+        return "codex"
+    return "inprocess"
+
+
+def _openrouter_base_url() -> str:
+    return os.environ.get("OPENROUTER_BASE_URL", "").strip().rstrip("/") or OPENROUTER_DEFAULT_BASE_URL
+
+
+def _openrouter_api_key() -> str:
+    api_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError(
+            "META_AGENT_LLM_PROVIDER=openrouter but OPENROUTER_API_KEY is not set."
+        )
+    return api_key
+
+
+def _anthropic_base_url() -> str:
+    return os.environ.get("ANTHROPIC_BASE_URL", "").strip().rstrip("/") or ANTHROPIC_DEFAULT_BASE_URL
+
+
+def _anthropic_api_key() -> str:
+    api_key = os.environ.get("ANTHROPIC_API_KEY", "").strip()
+    if not api_key:
+        raise RuntimeError(
+            "META_AGENT_LLM_PROVIDER=anthropic but ANTHROPIC_API_KEY is not set."
+        )
+    return api_key
+
+
+def _anthropic_version() -> str:
+    return os.environ.get("ANTHROPIC_VERSION", "").strip() or ANTHROPIC_DEFAULT_VERSION
+
+
+_RETRYABLE_STATUS = frozenset({408, 409, 429, 500, 502, 503, 504})
+
+
+def _post_json_with_retries(
+    *,
+    url: str,
+    headers: Mapping[str, str],
+    payload: Mapping[str, Any],
+    error_label: str,
+    timeout_s: float = 300.0,
+    max_retries: int = 10,
+    backoff_cap_s: float = 60.0,
+) -> dict[str, Any]:
+    """POST JSON with equal-jitter exponential backoff; return the parsed body.
+
+    Uses ``httpx`` with ``trust_env=True`` (the default) so HTTPS_PROXY /
+    HTTP_PROXY / NO_PROXY are always honored — required for the ASP secrets
+    broker, which injects the real API key at egress. This mirrors the retry
+    policy already used by the Bedrock and Tinker paths.
+    """
+    import httpx
+
+    with httpx.Client(timeout=timeout_s, trust_env=True) as client:
+        response: "httpx.Response | None" = None
+        for attempt in range(max_retries):
+            response = client.post(url, headers=dict(headers), json=dict(payload))
+            if response.status_code not in _RETRYABLE_STATUS:
+                break
+            if attempt == max_retries - 1:
+                break
+            retry_after = response.headers.get("retry-after")
+            try:
+                retry_after_secs = float(retry_after) if retry_after else 0.0
+            except ValueError:
+                retry_after_secs = 0.0
+            if retry_after_secs > 0:
+                delay = retry_after_secs + random.uniform(0.0, 1.0)
+            else:
+                base = min(2.0 * (2 ** attempt), backoff_cap_s)
+                delay = base / 2 + random.uniform(0.0, base / 2)
+            time.sleep(delay)
+        assert response is not None
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError as exc:
+        body = response.text[:1000]
+        raise RuntimeError(
+            f"{error_label} request failed: {response.status_code} {body}"
+        ) from exc
+    return response.json()
 
 
 # ---------------------------------------------------------------------------
@@ -1307,6 +1484,163 @@ async def invoke_openai_compatible(
     return await asyncio.to_thread(_invoke)
 
 
+def _strip_provider_prefix(model: str, prefix: str) -> str:
+    """Drop a leading ``<prefix>/`` from a model slug if present.
+
+    OpenRouter wants the raw vendor slug (``minimax/minimax-m2.7``), so a stray
+    ``openrouter/`` routing prefix must be removed — but a real vendor slug that
+    itself contains ``/`` (the common case) is preserved.
+    """
+    lowered = model.strip()
+    if lowered.lower().startswith(prefix + "/"):
+        return lowered[len(prefix) + 1:]
+    return lowered
+
+
+def _openrouter_chat_payload(
+    *,
+    model: str,
+    messages: Sequence[Mapping[str, Any]],
+    system: str | None,
+    max_tokens: int,
+    temperature: float | None,
+    extra_body: Mapping[str, Any] | None,
+) -> dict[str, Any]:
+    tools, tool_choice = _openai_tools_from_extra_body(extra_body)
+    payload: dict[str, Any] = {
+        "model": _strip_provider_prefix(model, "openrouter"),
+        "messages": _messages_for_openai_chat(messages=messages, system=system),
+        # Reasoning/tool-forcing models can spend the budget before the forced
+        # tool call; give them headroom when tools are present (mirrors the
+        # Azure/Tinker chat payloads).
+        "max_tokens": max(max_tokens, 4096) if tools else max_tokens,
+    }
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if tools:
+        payload["tools"] = _openai_chat_tools(tools)
+    chat_tool_choice = _openai_chat_tool_choice(tool_choice)
+    if chat_tool_choice is not None:
+        payload["tool_choice"] = chat_tool_choice
+    return payload
+
+
+async def invoke_openrouter_chat(
+    *,
+    model: str,
+    messages: Sequence[Mapping[str, Any]],
+    system: str | None = None,
+    max_tokens: int = 1024,
+    temperature: float | None = None,
+    extra_body: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Call OpenRouter's OpenAI-compatible Chat Completions endpoint.
+
+    OpenRouter does NOT implement the ``/responses`` API, so this always posts
+    to ``/chat/completions``. Anthropic-shaped tool specs in ``extra_body`` are
+    translated to OpenAI ``function`` tools, and the response is normalized back
+    to the Anthropic-style ``{"content": [...], "usage": {...}}`` shape callers
+    expect.
+    """
+    base_url = _openrouter_base_url()
+    api_key = _openrouter_api_key()
+    payload = _openrouter_chat_payload(
+        model=model,
+        messages=messages,
+        system=system,
+        max_tokens=max_tokens,
+        temperature=temperature,
+        extra_body=extra_body,
+    )
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "Content-Type": "application/json",
+    }
+
+    def _invoke() -> dict[str, Any]:
+        raw = _post_json_with_retries(
+            url=f"{base_url}/chat/completions",
+            headers=headers,
+            payload=payload,
+            error_label="OpenRouter Chat Completions",
+        )
+        normalized = _normalize_openai_chat_response(raw)
+        normalized["provider"] = "openrouter"
+        return normalized
+
+    return await asyncio.to_thread(_invoke)
+
+
+def _normalize_anthropic_messages_response(raw: Mapping[str, Any]) -> dict[str, Any]:
+    """Coerce an Anthropic Messages response into the project's standard shape.
+
+    The Messages API already returns ``content`` blocks (``text`` / ``tool_use``)
+    and a ``usage`` dict, so this is mostly a pass-through that guarantees the
+    keys downstream helpers (``extract_text`` and pointwise tool parsers) read.
+    """
+    content = raw.get("content")
+    content_blocks = list(content) if isinstance(content, list) else []
+    usage = raw.get("usage") if isinstance(raw.get("usage"), Mapping) else {}
+    return {
+        "content": content_blocks,
+        "usage": {
+            "input_tokens": usage.get("input_tokens"),
+            "output_tokens": usage.get("output_tokens"),
+        },
+        "model": raw.get("model"),
+        "stop_reason": raw.get("stop_reason"),
+        "provider": "anthropic",
+        "provider_raw": dict(raw),
+    }
+
+
+async def invoke_anthropic_messages(
+    *,
+    model: str,
+    messages: Sequence[Mapping[str, Any]],
+    system: str | None = None,
+    max_tokens: int = 1024,
+    temperature: float | None = None,
+    extra_body: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Call the Anthropic Messages API directly (no Bedrock, no boto3).
+
+    ``extra_body`` is already in Anthropic shape (``tools`` /
+    ``tool_choice``), so it is merged into the request body unchanged.
+    Auth is ``x-api-key`` + ``anthropic-version``; the base URL and version are
+    env-overridable (``ANTHROPIC_BASE_URL`` / ``ANTHROPIC_VERSION``).
+    """
+    base_url = _anthropic_base_url()
+    api_key = _anthropic_api_key()
+    body: dict[str, Any] = {
+        "model": _strip_provider_prefix(model, "anthropic"),
+        "max_tokens": max_tokens,
+        "messages": list(messages),
+    }
+    if system is not None:
+        body["system"] = system
+    if temperature is not None:
+        body["temperature"] = temperature
+    if extra_body:
+        body.update(extra_body)
+    headers = {
+        "x-api-key": api_key,
+        "anthropic-version": _anthropic_version(),
+        "Content-Type": "application/json",
+    }
+
+    def _invoke() -> dict[str, Any]:
+        raw = _post_json_with_retries(
+            url=f"{base_url}/v1/messages",
+            headers=headers,
+            payload=body,
+            error_label="Anthropic Messages",
+        )
+        return _normalize_anthropic_messages_response(raw)
+
+    return await asyncio.to_thread(_invoke)
+
+
 async def invoke_model(
     *,
     model: str,
@@ -1316,7 +1650,32 @@ async def invoke_model(
     temperature: float | None = None,
     extra_body: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """Route a program-harness model call to Bedrock, OpenAI-compatible, or Tinker APIs."""
+    """Route a program-harness model call to the selected provider.
+
+    When ``META_AGENT_LLM_PROVIDER`` is ``openrouter`` or ``anthropic``, every
+    call goes through that provider over HTTP (honoring proxy env) and boto3 is
+    never imported. With the default ``bedrock`` provider the historical routing
+    (Tinker / Azure-OpenAI / Bedrock by model-id shape) is unchanged.
+    """
+    provider = selected_llm_provider()
+    if provider == LLM_PROVIDER_OPENROUTER:
+        return await invoke_openrouter_chat(
+            model=model,
+            messages=messages,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            extra_body=extra_body,
+        )
+    if provider == LLM_PROVIDER_ANTHROPIC:
+        return await invoke_anthropic_messages(
+            model=model,
+            messages=messages,
+            system=system,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            extra_body=extra_body,
+        )
     if _looks_like_tinker_model(model):
         return await invoke_tinker_completions(
             model=model,
@@ -1391,20 +1750,55 @@ def extract_text(response: Mapping[str, Any]) -> str:
 # ---------------------------------------------------------------------------
 
 
-def bedrock_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
-    """Return an env dict with `CLAUDE_CODE_USE_BEDROCK=1` forced on.
+def _apply_agent_sdk_provider_env(env: dict[str, str]) -> dict[str, str]:
+    """Configure Claude-Agent-SDK / `claude` CLI routing for the active provider.
 
-    Use this when spawning `claude` CLI subprocesses that should route Claude
-    model traffic through Bedrock. Preserves any existing env overrides the
-    caller wants (`AWS_REGION`, permissions, etc.).
+    - ``bedrock``  → force ``CLAUDE_CODE_USE_BEDROCK=1`` (historical behavior).
+    - ``anthropic``→ clear the Bedrock flag so the SDK uses ``ANTHROPIC_API_KEY``
+      (and ``ANTHROPIC_BASE_URL`` if set) against api.anthropic.com directly.
+    - ``openrouter``→ clear the Bedrock flag and point the SDK at OpenRouter via
+      ``ANTHROPIC_BASE_URL`` + key from ``OPENROUTER_API_KEY``. NOTE: the agentic
+      claude_agent_sdk runtime speaks the Anthropic Messages protocol, so this
+      only works against an Anthropic-compatible OpenRouter endpoint; the
+      direct-call eval/judge/program paths (``invoke_model``) use OpenRouter's
+      Chat Completions API and always work.
     """
-    env = dict(base) if base is not None else dict(os.environ)
-    env["CLAUDE_CODE_USE_BEDROCK"] = "1"
+    provider = selected_llm_provider()
+    if provider == LLM_PROVIDER_BEDROCK:
+        env["CLAUDE_CODE_USE_BEDROCK"] = "1"
+        return env
+
+    env.pop("CLAUDE_CODE_USE_BEDROCK", None)
+    if provider == LLM_PROVIDER_OPENROUTER:
+        env.setdefault("ANTHROPIC_BASE_URL", _openrouter_base_url())
+        or_key = os.environ.get("OPENROUTER_API_KEY", "").strip()
+        if or_key and not env.get("ANTHROPIC_API_KEY"):
+            env["ANTHROPIC_API_KEY"] = or_key
+    elif provider == LLM_PROVIDER_ANTHROPIC:
+        base = os.environ.get("ANTHROPIC_BASE_URL", "").strip()
+        if base:
+            env["ANTHROPIC_BASE_URL"] = base
     return env
 
 
-def ensure_bedrock_env() -> None:
-    """Force `CLAUDE_CODE_USE_BEDROCK=1` and a safe SDK init timeout.
+def agent_sdk_subprocess_env(base: dict[str, str] | None = None) -> dict[str, str]:
+    """Return an env dict configured to route `claude` CLI traffic per provider.
+
+    Use this when spawning `claude` CLI subprocesses. Preserves any existing env
+    overrides the caller wants (`AWS_REGION`, permissions, etc.) and applies the
+    provider-specific routing (Bedrock flag / Anthropic / OpenRouter base+key).
+    """
+    env = dict(base) if base is not None else dict(os.environ)
+    return _apply_agent_sdk_provider_env(env)
+
+
+# Back-compat alias: callers (and external integrations) may still import the
+# Bedrock-named helper. It now honors META_AGENT_LLM_PROVIDER.
+bedrock_subprocess_env = agent_sdk_subprocess_env
+
+
+def ensure_agent_sdk_env() -> None:
+    """Configure the in-process Claude Agent SDK for the active provider.
 
     The Claude Agent SDK (`claude_agent_sdk.query`) reads `CLAUDE_CODE_USE_BEDROCK`
     to route Claude model traffic through Bedrock. It also reads
@@ -1414,9 +1808,15 @@ def ensure_bedrock_env() -> None:
     can't always complete handshake within 60s, producing
     `Exception: Control request timeout: initialize`.
 
-    We raise that default to 5 min via `setdefault` so callers can still
-    override by setting a different value in the environment. Call this
-    exactly before any in-process SDK invocation. Safe to call repeatedly.
+    For the default ``bedrock`` provider this forces ``CLAUDE_CODE_USE_BEDROCK=1``;
+    for ``anthropic``/``openrouter`` it clears that flag and sets the matching
+    base URL / key so the SDK talks to the Anthropic API (or an Anthropic-
+    compatible OpenRouter endpoint) instead. The timeout bump is always applied
+    via ``setdefault`` so callers can override. Safe to call repeatedly.
     """
-    os.environ["CLAUDE_CODE_USE_BEDROCK"] = "1"
+    _apply_agent_sdk_provider_env(os.environ)  # type: ignore[arg-type]
     os.environ.setdefault("CLAUDE_CODE_STREAM_CLOSE_TIMEOUT", "300000")
+
+
+# Back-compat alias for the historical name.
+ensure_bedrock_env = ensure_agent_sdk_env

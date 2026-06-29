@@ -263,12 +263,18 @@ def _build_codex_cmd(prompt: str, model: Optional[str]) -> list[str]:
 def _build_claude_cmd(
     prompt: str, system_append: str, model: Optional[str], max_turns: int,
 ) -> list[str]:
-    """Build the `claude` CLI command. Always routes through Bedrock via env."""
-    from meta_agent.services.llm import resolve_bedrock_model
+    """Build the `claude` CLI command.
+
+    Routing (Bedrock vs Anthropic vs OpenRouter) is governed by the env applied
+    in `_run_proposer_cli` via `agent_sdk_subprocess_env()`; the model id is
+    resolved for the active provider so a non-Bedrock provider isn't handed a
+    Bedrock inference-profile id.
+    """
+    from meta_agent.services.llm import resolve_model_for_provider
 
     permission_mode = os.environ.get("CLAUDE_PERMISSION_MODE", "bypassPermissions").strip()
     if model:
-        model = resolve_bedrock_model(model)
+        model = resolve_model_for_provider(model)
     cmd = [
         "claude",
         "--print", "--verbose",
@@ -378,6 +384,7 @@ def _run_proposer_cli(
     model_instructions: str = "",
     max_turns: int = DEFAULT_PROPOSER_MAX_TURNS,
     model: Optional[str] = None,
+    target: Optional[AgentTarget] = None,
 ) -> ProposerRunResult:
     """Run a proposer CLI with stream-json, print summaries, optionally save trace.
 
@@ -391,6 +398,25 @@ def _run_proposer_cli(
     """
     import threading
     import time
+
+    # CLI-free proposer: drive the configured LLM provider directly. Needs no
+    # `claude`/`codex` binary on PATH — the path used on the ASP fleet.
+    if cli in {"inprocess", "api"}:
+        if staging_dir is None or target is None:
+            return ProposerRunResult(
+                exit_code=1, cli=cli, model=model,
+                stderr="in-process proposer requires staging_dir and target",
+            )
+        from meta_agent.loop.inprocess_proposer import run_inprocess_proposer
+
+        return run_inprocess_proposer(
+            prompt=prompt,
+            system_append=system_append,
+            staging_dir=staging_dir,
+            target=target,
+            model=model,
+            trace_path=trace_path,
+        )
 
     stall_timeout = float(
         os.environ.get(
@@ -515,8 +541,8 @@ def _run_proposer_cli(
 
     trace_file = open(trace_path, "w") if trace_path else None
     try:
-        from meta_agent.services.llm import bedrock_subprocess_env
-        subprocess_env = bedrock_subprocess_env() if cli != "codex" else None
+        from meta_agent.services.llm import agent_sdk_subprocess_env
+        subprocess_env = agent_sdk_subprocess_env() if cli != "codex" else None
         process = subprocess.Popen(
             cmd,
             cwd=str(get_workspace_root()),
@@ -1103,6 +1129,7 @@ def invoke_proposer(
         model_instructions=_codex_model_instructions(target),
         max_turns=max_turns,
         model=model,
+        target=target,
     )
     complete_staged_count = _complete_staged_candidate_count(
         staging_dir, target, candidates_per_iter,

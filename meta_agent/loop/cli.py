@@ -38,12 +38,16 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument("--split", default=None,
                         help="Search-split name when the family YAML has multiple splits")
     parser.add_argument("--iterations", type=int, default=5, help="Number of evolution iterations")
-    parser.add_argument("--model", default="gpt-5.4", help="Model for evaluation")
+    parser.add_argument("--model", default=None,
+                        help="Model for evaluation (default: $META_AGENT_MODEL, "
+                        "or the provider default; falls back to gpt-5.4)")
     parser.add_argument("--fast", action="store_true", help="Use benchmark's fast_tasks subset")
     parser.add_argument("--concurrency", type=int, default=4, help="Parallel task count")
     parser.add_argument("--start-from", type=int, default=1, help="Starting iteration number (for resuming)")
-    parser.add_argument("--proposer-model", default="gpt-5.4",
-                        help="Model for the proposer agent (default: gpt-5.4)")
+    parser.add_argument("--proposer-model", default=None,
+                        help="Model for the proposer agent (default: "
+                        "$META_AGENT_PROPOSER_MODEL / $META_AGENT_MODEL, or the "
+                        "eval model; falls back to gpt-5.4)")
     parser.add_argument(
         "--proposer-max-turns",
         type=int,
@@ -106,8 +110,12 @@ def build_arg_parser() -> argparse.ArgumentParser:
             "holdout accuracy' policy and prevents search-set overfitting."
         ),
     )
-    parser.add_argument("--proposer-cli", default="codex", choices=["claude", "codex"],
-                        help="CLI to use as the proposer agent (default: codex)")
+    parser.add_argument("--proposer-cli", default=None,
+                        choices=["claude", "codex", "inprocess", "api"],
+                        help="Proposer backend. 'inprocess'/'api' drive the "
+                        "configured LLM provider directly (no external CLI). "
+                        "Default: 'inprocess' when META_AGENT_LLM_PROVIDER is "
+                        "openrouter/anthropic, else 'codex'.")
     parser.add_argument("--batch-size", type=int, default=None,
                         help="Number of search tasks per epoch (samples from full pool)")
     parser.add_argument("--seed", type=int, default=None,
@@ -181,6 +189,20 @@ def run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return 2
+    # Resolve env-driven defaults for model / proposer model / proposer backend
+    # so a non-Bedrock provider (openrouter/anthropic) works with no extra flags.
+    from meta_agent.services.llm import (
+        default_eval_model,
+        default_proposer_cli,
+        default_proposer_model,
+    )
+    if not getattr(args, "model", None):
+        args.model = default_eval_model()
+    if not getattr(args, "proposer_model", None):
+        args.proposer_model = default_proposer_model(args.model)
+    if not getattr(args, "proposer_cli", None):
+        args.proposer_cli = default_proposer_cli()
+
     if getattr(args, "candidates_per_iter", None) is None:
         default_k = _benchmark_candidates_per_iter_default(
             args.benchmark, get_workspace_root(),
