@@ -82,11 +82,15 @@ def _handle_loop(loop_argv: list[str]) -> int:
 
 
 def _handle_propose(args: argparse.Namespace) -> int:
+    from meta_agent.services.llm import default_proposer_cli, default_proposer_model
+
+    model = args.model or default_proposer_model()
+    proposer_cli = args.proposer_cli or default_proposer_cli()
     ok = propose.propose(
         project=args.project,
         harness=args.harness,
-        model=args.model,
-        proposer_cli=args.proposer_cli,
+        model=model,
+        proposer_cli=proposer_cli,
         apply=args.apply,
     )
     return 0 if ok else 1
@@ -191,8 +195,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "program_harness",
         ],
     )
-    p.add_argument("--model", default="gpt-5.4")
-    p.add_argument("--proposer-cli", default="codex", choices=["claude", "codex"])
+    p.add_argument("--model", default=None,
+                   help="Proposer model (default: $META_AGENT_PROPOSER_MODEL / "
+                   "$META_AGENT_MODEL; falls back to gpt-5.4)")
+    p.add_argument("--proposer-cli", default=None,
+                   choices=["claude", "codex", "inprocess", "api"],
+                   help="Proposer backend. 'inprocess'/'api' need no external "
+                   "CLI. Default: 'inprocess' for openrouter/anthropic providers, "
+                   "else 'codex'.")
     p.add_argument("--apply", action="store_true")
     p.set_defaults(handler=_handle_propose)
 

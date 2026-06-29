@@ -138,13 +138,13 @@ def _run_agent_claude_sdk_sync(
     )
 
     from meta_agent.harness_contracts.claude_agent_sdk import build_claude_agent_options
-    from meta_agent.services.llm import ensure_bedrock_env, resolve_bedrock_model
+    from meta_agent.services.llm import ensure_agent_sdk_env, resolve_model_for_provider
     from meta_agent.core.run_context import RunContext
 
-    ensure_bedrock_env()
+    ensure_agent_sdk_env()
 
     harness_path = Path(config_dir) / "harness.py"
-    resolved_model = resolve_bedrock_model(model)
+    resolved_model = resolve_model_for_provider(model)
     ctx = RunContext(
         cwd=str(work_dir),
         model=resolved_model,

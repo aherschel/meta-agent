@@ -104,6 +104,56 @@ searches.
 Claude-based runs need AWS Bedrock credentials. See
 [`.env.example`](./.env.example).
 
+## LLM providers (Bedrock · OpenRouter · Anthropic)
+
+By default every Claude call routes through **AWS Bedrock**. To run on a host
+that only has an OpenRouter or Anthropic key (no AWS access — e.g. inside the
+ASP fleet), select a provider with `META_AGENT_LLM_PROVIDER`. It governs the
+eval / judge / program-harness model calls (`invoke_model`) *and* the in-process
+proposer; when it is not `bedrock`, **boto3 is never imported**.
+
+| `META_AGENT_LLM_PROVIDER` | API | Base URL | Auth | Model id |
+| ------------------------- | --- | -------- | ---- | -------- |
+| `bedrock` *(default)* | Bedrock `invoke_model` | `AWS_REGION` | AWS cred chain | short name → inference profile |
+| `openrouter` | OpenAI-compatible **Chat Completions** (`/chat/completions`, never `/responses`) | `OPENROUTER_BASE_URL` (def. `https://openrouter.ai/api/v1`) | `Authorization: Bearer $OPENROUTER_API_KEY` | raw slug, e.g. `minimax/minimax-m2.7` |
+| `anthropic` | **Messages API** (`/v1/messages`) | `ANTHROPIC_BASE_URL` (def. `https://api.anthropic.com`) | `x-api-key: $ANTHROPIC_API_KEY` + `anthropic-version` | `claude-*` slug |
+
+All provider HTTP honors the standard proxy env (`HTTPS_PROXY` / `HTTP_PROXY` /
+`NO_PROXY`) via `httpx(trust_env=True)`, and uses the same equal-jitter
+retry/backoff as the Bedrock path. Existing Bedrock/Azure behavior is unchanged
+when the variable is unset.
+
+Minimal OpenRouter loop (no AWS creds, no external CLI):
+
+```bash
+export META_AGENT_LLM_PROVIDER=openrouter
+export OPENROUTER_API_KEY=sk-or-...
+meta-agent loop \
+  --benchmark benchmarks/example/benchmark.yaml \
+  --baseline harnesses/starter/program_harness \
+  --run-name openrouter-demo \
+  --model minimax/minimax-m2.7 \
+  --iterations 1
+# then:
+meta-agent propose --project openrouter-demo --harness program_harness
+```
+
+### CLI-free proposer
+
+The proposer normally execs an external agent CLI (`claude`/`codex`). For
+providers without those binaries, pass `--proposer-cli inprocess` (the default
+when `META_AGENT_LLM_PROVIDER` is `openrouter`/`anthropic`): it drives the
+selected provider directly through one forced-tool call and stages the candidate
+file(s) — no `claude`/`codex` on PATH. Eval and proposer models default from
+`META_AGENT_MODEL` / `META_AGENT_PROPOSER_MODEL` so neither is hardwired.
+
+> **Note on the agentic `claude_agent_sdk` runtime.** The `anthropic` provider
+> runs it natively (the SDK uses your `ANTHROPIC_API_KEY`/`ANTHROPIC_BASE_URL`
+> with the Bedrock flag cleared). The OpenAI-compatible OpenRouter Chat
+> Completions API is fully supported by the **direct-call** paths
+> (program/research/judge harnesses + the in-process proposer); the in-process
+> agentic SDK runtime needs an Anthropic-compatible endpoint.
+
 <details>
 <summary><strong>Repo layout</strong></summary>
 

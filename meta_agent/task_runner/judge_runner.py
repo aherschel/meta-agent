@@ -45,7 +45,10 @@ from meta_agent.harness_contracts.claude_agent_sdk import (
     prepend_system_prompt,
     set_default_max_turns,
 )
-from meta_agent.services.llm import ensure_bedrock_env, resolve_bedrock_model
+from meta_agent.services.llm import (
+    ensure_agent_sdk_env as ensure_bedrock_env,
+    resolve_model_for_provider as resolve_bedrock_model,
+)
 from meta_agent.harness_contracts.program import (
     HarnessContext,
     run_program_harness,
